@@ -35,7 +35,34 @@ const (
 	ErrorFileIncorrectHeader
 	ErrorFileIncorrectVersion
 	ErrorFileIncorrectInputInfo
+	ErrorFileIncorrectFrame
+
+	ErrorInvalidOperation
 )
+
+
+const (
+	opNoop = 0
+	opMove = 2
+	opReturn = 3
+	opConstant = 4
+	opSample = 5
+	opAdd = 8
+	opMultiply = 9
+)
+
+func op_length(operation uint8) int64 {
+	switch operation {
+		case opNoop:		return 0
+		case opMove:		return 1
+		case opReturn:		return 0
+		case opConstant:	return 5
+		case opSample:		return 5
+		case opAdd:			return 1
+		case opMultiply:	return 1
+		default:			return -1
+	}
+}
 
 /*
 
@@ -55,6 +82,12 @@ type AssemblyInput struct {
 	Height int
 }
 
+type AssemblyFrame struct {
+	Width int
+	Height int
+	Bytecode []byte
+}
+
 type ImageAssembly struct {
 	input_count int
 	frame_count int
@@ -62,6 +95,7 @@ type ImageAssembly struct {
 	flags int
 
 	inputs []AssemblyInput
+	frames []AssemblyFrame
 }
 
 func LoadImageAssembly(filename string) (*ImageAssembly, error) {
@@ -125,6 +159,7 @@ func LoadImageAssembly(filename string) (*ImageAssembly, error) {
 	}
 
 	inputs := make([]AssemblyInput, input_count)
+	frames := make([]AssemblyFrame, frame_count)
 
 	for i := 0; i < int(input_count); i++ {
 		var input_index uint8
@@ -168,8 +203,83 @@ func LoadImageAssembly(filename string) (*ImageAssembly, error) {
 	//  - parse frame headers
 	//  - remember the bytecode somewhere
 
+	for i := 0; i < int(frame_count); i++ {
+		var frame_header [4]byte
+		_, err = io.ReadFull(f, frame_header[:])
+		if err != nil {
+			return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read frame header for '%s'", filename)}
+		}
 
-	return &ImageAssembly{inputs: inputs}, nil
+		if string(frame_header[:]) != "FRME" {
+			return nil, &AssemblyError {Code: ErrorFileIncorrectFrame, Message: fmt.Sprintf("Invalid frame header '%s' in '%s'", string(frame_header[:]), filename)}
+		}
+
+		var frame_width uint16
+		var frame_height uint16
+
+		err = binary.Read(f, binary.LittleEndian, &frame_width)
+		if (err != nil) {
+			return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read frame in '%s'", filename)}
+		}
+
+		err = binary.Read(f, binary.LittleEndian, &frame_height)
+		if (err != nil) {
+			return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read frame in '%s'", filename)}
+		}
+
+		pixel_count := int(frame_width) * int(frame_height)
+
+		Debugln("Frame index:", i)
+		Debugln("Frame dimensions:", frame_width, "by", frame_height)
+
+		bytecode_begin, err := f.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read frame in '%s'", filename)}
+		}
+
+		for j := 0; j < pixel_count; j++ {
+			var operation uint8
+			
+			err = binary.Read(f, binary.LittleEndian, &operation)
+			if err != nil {
+				return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read operation in '%s'", filename)}
+			}
+
+			parameter_length := op_length(operation)
+			if parameter_length < 0 {
+				return nil, &AssemblyError {Code: ErrorInvalidOperation, Message: fmt.Sprintf("Invalid operation %x '%s'", operation, filename)}
+			}
+
+			if parameter_length > 0 {
+				_, err = f.Seek(parameter_length, io.SeekCurrent)
+				if err != nil {
+					return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read file frame in '%s'", filename)}
+				}
+			}
+
+
+		}
+
+		bytecode_end, err := f.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read frame in '%s'", filename)}
+		}
+
+		bytecode_length := bytecode_end - bytecode_begin
+		bytecode := make([]byte, bytecode_length)
+
+		_, err = f.ReadAt(bytecode, bytecode_begin)
+		if err != nil {
+			return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read frame in '%s'", filename)}
+		}
+
+		frames[i].Width = int(frame_width)
+		frames[i].Height = int(frame_height)
+		frames[i].Bytecode = bytecode
+	}
+
+
+	return &ImageAssembly{inputs: inputs, frames: frames}, nil
 }
 
 func (this *ImageAssembly) GetWidth() int {
