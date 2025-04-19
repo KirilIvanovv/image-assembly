@@ -38,6 +38,8 @@ const (
 	ErrorFileIncorrectFrame
 
 	ErrorInvalidOperation
+	ErrorInvalidAssemblyList
+	ErrorInvalidAssemblyImage
 )
 
 
@@ -76,6 +78,19 @@ func op_name(operation uint8) string {
 		default:			return "INVD"
 	}
 }
+
+
+type AssemblyImage struct {
+	Width int
+	Height int
+	Pixels []byte
+}
+
+type AssemblyList struct {
+	Images []AssemblyImage
+}
+
+
 
 type AssemblyInput struct {
 	Width int
@@ -288,6 +303,18 @@ func (this *ImageAssembly) GetHeight() int {
 	return this.inputs[0].Height;
 }
 
+func (this *ImageAssembly) GetTemplate() *AssemblyList {
+	template := &AssemblyList {Images: make([]AssemblyImage, len(this.inputs))}
+
+	for i := 0; i < len(this.inputs); i++ {
+		template.Images[i].Width = this.inputs[i].Width
+		template.Images[i].Height = this.inputs[i].Height
+		template.Images[i].Pixels = make([]byte, template.Images[i].Width * template.Images[i].Height * 4)
+	}
+
+	return template
+}
+
 func (this *ImageAssembly) PrintInfo() {
 	fmt.Println("Image assembly")
 	fmt.Println("Flags:", this.flags)
@@ -304,14 +331,17 @@ func (this *ImageAssembly) PrintInfo() {
 func (this *ImageAssembly) PrintBytecode(frame int, x int, y int) {
 	if frame < 0 || frame >= this.frame_count {
 		fmt.Println("Invalid frame index", frame, ", index allowed between 0 and", this.frame_count)
+		return
 	}
 
 	if x < 0 || x >= this.frames[frame].Width {
 		fmt.Println("Invalid frame", frame, "x coordinate", x, ", coordinate allowed between 0 and", this.frames[frame].Width)
+		return
 	}
 
 	if y < 0 || y >= this.frames[frame].Height {
 		fmt.Println("Invalid frame", frame, "y coordinate", y, ", coordinate allowed between 0 and", this.frames[frame].Height)
+		return
 	}
 
 	pixel_index := this.frames[frame].Width * y + x
@@ -425,4 +455,223 @@ func (this *ImageAssembly) PrintBytecode(frame int, x int, y int) {
 			break
 		}
 	}
+}
+
+type register struct {
+	r int
+	g int
+	b int
+	a int
+}
+
+func (this *ImageAssembly) AssembleImage(frame int, images *AssemblyList) error {
+	if frame < 0 || frame >= this.frame_count {
+		return &AssemblyError {Code: ErrorInvalidAssemblyList, Message: fmt.Sprint("Invalid frame index %d, index allowed between 0 and %d", frame, this.frame_count)}
+	}
+
+	if (len(images.Images) != this.input_count) {
+		return &AssemblyError {Code: ErrorInvalidAssemblyList, Message: fmt.Sprint("Invalid image list length %d, needs to be %d", len(images.Images), this.input_count)}
+	}
+	
+	for i := 0; i < len(images.Images); i++ {
+		pixels_in_frame := this.inputs[i].Width * this.inputs[i].Height
+		pixels_in_input := len(images.Images[i].Pixels) / 4
+
+		if pixels_in_frame != pixels_in_input {
+			return &AssemblyError {Code: ErrorInvalidAssemblyImage, Message: fmt.Sprint("Invalid input index %d size %d, needs to be %d", i, pixels_in_input, pixels_in_frame)}
+		}
+	}
+
+	output := images.Images[0].Pixels
+
+	pixel_count := this.frames[frame].Width * this.frames[frame].Height
+
+	bytecode := this.frames[frame].Bytecode
+
+	byte_index := 0
+
+	var registers [4]register
+
+	debugpix := 140 + this.frames[frame].Width * 66
+
+
+	for pixel := 0; pixel < pixel_count; pixel++ {
+	
+		for i := 0; i < 4; i++ {
+			registers[i].r = 0x00
+			registers[i].g = 0x00
+			registers[i].b = 0x00
+			registers[i].a = 0x00
+		}
+
+		for {
+			operation := bytecode[byte_index]
+			byte_index++
+
+			switch operation {
+				case opNoop:
+					//fmt.Print("NOOP")
+					break
+				case opMove:
+					param := bytecode[byte_index]
+					byte_index++
+					
+					destination_register := param >> 4 
+					source_register := param & 0x0F
+
+					registers[destination_register].r = registers[source_register].r
+					registers[destination_register].b = registers[source_register].g
+					registers[destination_register].b = registers[source_register].b
+					registers[destination_register].a = registers[source_register].a
+
+					//fmt.Printf("MOVE %02d, %02d", destination_register, source_register)
+
+					break
+				case opReturn:
+					//fmt.Print("RET ")
+					break
+				case opConstant:
+
+					param := bytecode[byte_index]
+					byte_index++
+					
+					//destination_register := param & 0x0F
+					destination_register := param >> 4
+
+					registers[destination_register].r = int(bytecode[byte_index + 0])
+					registers[destination_register].g = int(bytecode[byte_index + 1])
+					registers[destination_register].b = int(bytecode[byte_index + 2])
+					registers[destination_register].a = int(bytecode[byte_index + 3])
+
+					byte_index += 4
+
+					//fmt.Printf("LOAD %02d, %02x %02x %02x %02x", destination_register, r, g, b, a)
+					
+					break
+				case opSample:
+					
+					param := bytecode[byte_index]
+					byte_index++
+
+					destination_register := param >> 4 
+					source_input := param & 0x0F
+
+
+					x := binary.LittleEndian.Uint16(bytecode[byte_index + 0 : byte_index + 2])
+					y := binary.LittleEndian.Uint16(bytecode[byte_index + 2 : byte_index + 4])
+
+					byte_index += 4
+
+					_ = x
+					_ = y
+					_ = source_input
+
+					source_image := images.Images[source_input]
+
+					source_pixel := source_image.Width * int(y) + int(x)
+					source_index := source_pixel * 4
+
+
+					/*registers[destination_register].r = 0x00
+					registers[destination_register].g = 0x00
+					registers[destination_register].b = 0x00
+					registers[destination_register].a = 0xFF*/
+
+					// TODO: implement sampling!!!
+					/*registers[destination_register].r = 0xFF
+					registers[destination_register].g = 0xFF
+					registers[destination_register].b = 0xFF
+					registers[destination_register].a = 0xFF*/
+					registers[destination_register].r = int(source_image.Pixels[source_index + 0])
+					registers[destination_register].g = int(source_image.Pixels[source_index + 1])
+					registers[destination_register].b = int(source_image.Pixels[source_index + 2])
+					registers[destination_register].a = 0xFF
+
+					//fmt.Printf("SMPL %02d, %02d %04d %04d", destination_register, source_input, x, y)
+
+					break
+				case opAdd:
+					param := bytecode[byte_index]
+					byte_index++
+					
+					destination_register := param >> 4 
+					source_register := param & 0x0F
+
+					registers[destination_register].r += registers[source_register].r
+					registers[destination_register].g += registers[source_register].g
+					registers[destination_register].b += registers[source_register].b
+					//registers[destination_register].a += registers[source_register].a
+
+
+					break
+				case opMultiply:
+					param := bytecode[byte_index]
+					byte_index++
+					
+					destination_register := param >> 4 
+					source_register := param & 0x0F
+
+					registers[destination_register].r *= registers[source_register].r
+					registers[destination_register].g *= registers[source_register].g
+					registers[destination_register].b *= registers[source_register].b
+					//registers[destination_register].a *= registers[source_register].a
+
+					registers[destination_register].r >>= 8
+					registers[destination_register].b >>= 8
+					registers[destination_register].g >>= 8
+					//registers[destination_register].a >>= 8
+
+					//fmt.Printf("MULT %02d, %02d", destination_register, source_register)
+					break
+				default:
+					//fmt.Print("INVD")
+			}
+
+			//fmt.Print("\n")
+
+			if pixel == debugpix {
+				for i := 0; i < 4; i++ {
+					fmt.Printf("R%d %3d %3d %3d %3d ", i, registers[i].r, registers[i].g, registers[i].b, registers[i].a)
+				}
+
+				fmt.Println()
+			}
+
+			if operation == opReturn {
+				break
+			}
+		}
+
+		if registers[0].r > 255 {
+			registers[0].r = 255
+		}
+
+		if registers[0].g > 255 {
+			registers[0].g = 255
+		}
+
+		if registers[0].b > 255 {
+			registers[0].b = 255
+		}
+
+		if registers[0].a > 255 {
+			registers[0].a = 255
+		}
+
+		output[pixel * 4 + 0] = byte(registers[0].r)
+		output[pixel * 4 + 1] = byte(registers[0].g)
+		output[pixel * 4 + 2] = byte(registers[0].b)
+		//output[pixel * 4 + 3] = byte(registers[0].a)
+		output[pixel * 4 + 3] = 0xFF
+
+		/*output[pixel * 4 + 0] = 0x00
+		output[pixel * 4 + 1] = 0xFF
+		output[pixel * 4 + 2] = 0xFF
+		output[pixel * 4 + 3] = 0xFF*/
+	}
+
+
+
+
+	return nil
 }
