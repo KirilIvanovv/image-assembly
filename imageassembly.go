@@ -51,7 +51,7 @@ const (
 	opMultiply = 9
 )
 
-func op_length(operation uint8) int64 {
+func op_length(operation uint8) int {
 	switch operation {
 		case opNoop:		return 0
 		case opMove:		return 1
@@ -64,18 +64,18 @@ func op_length(operation uint8) int64 {
 	}
 }
 
-/*
-
-class ImageAssembly
-class Frame
-class Pixel
-class Operation
-
-class ImageSource
-- load (file)
-- save (file)
-
-*/
+func op_name(operation uint8) string {
+	switch operation {
+		case opNoop:		return "NOOP"
+		case opMove:		return "MOVE"
+		case opReturn:		return "RET "
+		case opConstant:	return "LOAD"
+		case opSample:		return "SMPL"
+		case opAdd:			return "ADD "
+		case opMultiply:	return "MULT"
+		default:			return "INVD"
+	}
+}
 
 type AssemblyInput struct {
 	Width int
@@ -196,13 +196,6 @@ func LoadImageAssembly(filename string) (*ImageAssembly, error) {
 		inputs[input_index].Height = int(input_height)
 	}
 	
-
-	// TODO:
-	//	- go through the file
-	//	- find frame headers
-	//  - parse frame headers
-	//  - remember the bytecode somewhere
-
 	for i := 0; i < int(frame_count); i++ {
 		var frame_header [4]byte
 		_, err = io.ReadFull(f, frame_header[:])
@@ -238,26 +231,31 @@ func LoadImageAssembly(filename string) (*ImageAssembly, error) {
 		}
 
 		for j := 0; j < pixel_count; j++ {
-			var operation uint8
-			
-			err = binary.Read(f, binary.LittleEndian, &operation)
-			if err != nil {
-				return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read operation in '%s'", filename)}
-			}
-
-			parameter_length := op_length(operation)
-			if parameter_length < 0 {
-				return nil, &AssemblyError {Code: ErrorInvalidOperation, Message: fmt.Sprintf("Invalid operation %x '%s'", operation, filename)}
-			}
-
-			if parameter_length > 0 {
-				_, err = f.Seek(parameter_length, io.SeekCurrent)
+			for {
+				var operation uint8
+				
+				err = binary.Read(f, binary.LittleEndian, &operation)
 				if err != nil {
-					return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read file frame in '%s'", filename)}
+					return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read operation in '%s'", filename)}
 				}
+
+				parameter_length := int64(op_length(operation))
+				if parameter_length < 0 {
+					return nil, &AssemblyError {Code: ErrorInvalidOperation, Message: fmt.Sprintf("Invalid operation %x '%s'", operation, filename)}
+				}
+
+				if parameter_length > 0 {
+					_, err = f.Seek(parameter_length, io.SeekCurrent)
+					if err != nil {
+						return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read file frame in '%s'", filename)}
+					}
+				}
+
+				if operation == opReturn {
+					break
+				}
+
 			}
-
-
 		}
 
 		bytecode_end, err := f.Seek(0, io.SeekCurrent)
@@ -279,7 +277,7 @@ func LoadImageAssembly(filename string) (*ImageAssembly, error) {
 	}
 
 
-	return &ImageAssembly{inputs: inputs, frames: frames}, nil
+	return &ImageAssembly{flags: int(file_flags), input_count: int(input_count), frame_count: int(frame_count), inputs: inputs, frames: frames}, nil
 }
 
 func (this *ImageAssembly) GetWidth() int {
@@ -288,4 +286,143 @@ func (this *ImageAssembly) GetWidth() int {
 
 func (this *ImageAssembly) GetHeight() int {
 	return this.inputs[0].Height;
+}
+
+func (this *ImageAssembly) PrintInfo() {
+	fmt.Println("Image assembly")
+	fmt.Println("Flags:", this.flags)
+	fmt.Println("Inputs:", this.input_count)
+	for i := 0; i < this.input_count; i++ {
+		fmt.Println("\tInput", i, "size", this.inputs[i].Width, "by", this.inputs[i].Height)
+	}
+	fmt.Println("Frames:", this.frame_count)
+	for i := 0; i < this.frame_count; i++ {
+		fmt.Println("\tFrame", i, "size", this.frames[i].Width, "by", this.frames[i].Height, "with", len(this.frames[i].Bytecode), "bytecodes")
+	}
+}
+
+func (this *ImageAssembly) PrintBytecode(frame int, x int, y int) {
+	if frame < 0 || frame >= this.frame_count {
+		fmt.Println("Invalid frame index", frame, ", index allowed between 0 and", this.frame_count)
+	}
+
+	if x < 0 || x >= this.frames[frame].Width {
+		fmt.Println("Invalid frame", frame, "x coordinate", x, ", coordinate allowed between 0 and", this.frames[frame].Width)
+	}
+
+	if y < 0 || y >= this.frames[frame].Height {
+		fmt.Println("Invalid frame", frame, "y coordinate", y, ", coordinate allowed between 0 and", this.frames[frame].Height)
+	}
+
+	pixel_index := this.frames[frame].Width * y + x
+	byte_index := 0
+
+	for i := 0; i < pixel_index; i++ {
+		for {
+			operation := uint8(this.frames[frame].Bytecode[byte_index])
+
+			parameter_length := op_length(operation)
+
+			if parameter_length < 0 {
+				fmt.Println("Wait what")
+			}
+
+			byte_index += parameter_length + 1
+
+			if operation == opReturn {
+				break
+			}
+
+		}
+		
+	}
+
+	fmt.Println("Found at index:", byte_index)
+
+	for {
+		fmt.Printf("%06d ", byte_index)
+
+		operation := this.frames[frame].Bytecode[byte_index]
+		byte_index++
+
+		switch operation {
+			case opNoop:
+				fmt.Print("NOOP")
+				break
+			case opMove:
+				param := this.frames[frame].Bytecode[byte_index]
+				byte_index++
+				
+				destination_register := param >> 4 
+				source_register := param & 0x0F
+
+				fmt.Printf("MOVE %02d, %02d", destination_register, source_register)
+
+				break
+			case opReturn:
+				fmt.Print("RET ")
+				break
+			case opConstant:
+
+				param := this.frames[frame].Bytecode[byte_index]
+				byte_index++
+				
+				//destination_register := param & 0x0F
+				destination_register := param >> 4
+
+				r := this.frames[frame].Bytecode[byte_index + 0]
+				g := this.frames[frame].Bytecode[byte_index + 1]
+				b := this.frames[frame].Bytecode[byte_index + 2]
+				a := this.frames[frame].Bytecode[byte_index + 3]
+
+				byte_index += 4
+
+				fmt.Printf("LOAD %02d, %02x %02x %02x %02x", destination_register, r, g, b, a)
+				
+				break
+			case opSample:
+				
+				param := this.frames[frame].Bytecode[byte_index]
+				byte_index++
+
+				destination_register := param >> 4 
+				source_input := param & 0x0F
+
+
+				x := binary.LittleEndian.Uint16(this.frames[frame].Bytecode[byte_index + 0 : byte_index + 2])
+				y := binary.LittleEndian.Uint16(this.frames[frame].Bytecode[byte_index + 2 : byte_index + 4])
+
+				byte_index += 4
+
+				fmt.Printf("SMPL %02d, %02d %04d %04d", destination_register, source_input, x, y)
+
+				break
+			case opAdd:
+				param := this.frames[frame].Bytecode[byte_index]
+				byte_index++
+				
+				destination_register := param >> 4 
+				source_register := param & 0x0F
+
+				fmt.Printf("ADD  %02d, %02d", destination_register, source_register)
+				break
+			case opMultiply:
+				param := this.frames[frame].Bytecode[byte_index]
+				byte_index++
+				
+				destination_register := param >> 4 
+				source_register := param & 0x0F
+
+				fmt.Printf("MULT %02d, %02d", destination_register, source_register)
+				break
+			default:
+				fmt.Print("INVD")
+		}
+
+		fmt.Print("\n")
+
+		if operation == opReturn {
+			break
+		}
+	}
 }
