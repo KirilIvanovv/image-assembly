@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"fmt"
+	"bufio"
 )
 
 func Add(a, b int) int {
@@ -116,11 +117,13 @@ type ImageAssembly struct {
 func LoadImageAssembly(filename string) (*ImageAssembly, error) {
 	// ============================= OPENING FILE =============================
 
-	f, err := os.Open(filename)
+	file, err := os.Open(filename)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer file.Close()
+	
+	f := bufio.NewReader(file)
 
 	// ============================ PARSING HEADER ============================
 	var file_header [8]byte
@@ -187,7 +190,8 @@ func LoadImageAssembly(filename string) (*ImageAssembly, error) {
 			return nil, &AssemblyError {Code: ErrorFileIncorrectInputInfo, Message: fmt.Sprintf("Incorrent input index %d in '%s'", input_index, filename)}
 		}
 
-		_, err = f.Seek(3, io.SeekCurrent)
+		//_, err = f.Seek(3, io.SeekCurrent)
+		_, err = io.CopyN(io.Discard, f, 3)
 		if err != nil {
 			return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read file header for '%s'", filename)}
 		}
@@ -240,50 +244,37 @@ func LoadImageAssembly(filename string) (*ImageAssembly, error) {
 		Debugln("Frame index:", i)
 		Debugln("Frame dimensions:", frame_width, "by", frame_height)
 
-		bytecode_begin, err := f.Seek(0, io.SeekCurrent)
-		if err != nil {
-			return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read frame in '%s'", filename)}
-		}
+		var bytecode []byte
 
 		for j := 0; j < pixel_count; j++ {
 			for {
 				var operation uint8
-				
 				err = binary.Read(f, binary.LittleEndian, &operation)
 				if err != nil {
 					return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read operation in '%s'", filename)}
 				}
 
-				parameter_length := int64(op_length(operation))
+				// Append operation to bytecode
+				bytecode = append(bytecode, operation)
+
+				parameter_length := op_length(operation)
 				if parameter_length < 0 {
-					return nil, &AssemblyError {Code: ErrorInvalidOperation, Message: fmt.Sprintf("Invalid operation %x '%s'", operation, filename)}
+					return nil, &AssemblyError {Code: ErrorInvalidOperation,Message: fmt.Sprintf("Invalid operation %x in '%s'", operation, filename)}
 				}
 
 				if parameter_length > 0 {
-					_, err = f.Seek(parameter_length, io.SeekCurrent)
+					param := make([]byte, parameter_length)
+					_, err = io.ReadFull(f, param)
 					if err != nil {
-						return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read file frame in '%s'", filename)}
+						return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read operation parameters in '%s'", filename)}
 					}
+					bytecode = append(bytecode, param...)
 				}
 
 				if operation == opReturn {
 					break
 				}
-
 			}
-		}
-
-		bytecode_end, err := f.Seek(0, io.SeekCurrent)
-		if err != nil {
-			return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read frame in '%s'", filename)}
-		}
-
-		bytecode_length := bytecode_end - bytecode_begin
-		bytecode := make([]byte, bytecode_length)
-
-		_, err = f.ReadAt(bytecode, bytecode_begin)
-		if err != nil {
-			return nil, &AssemblyError {Code: ErrorFileIOError, Message: fmt.Sprintf("Can't read frame in '%s'", filename)}
 		}
 
 		frames[i].Width = int(frame_width)
@@ -301,6 +292,14 @@ func (this *ImageAssembly) GetWidth() int {
 
 func (this *ImageAssembly) GetHeight() int {
 	return this.inputs[0].Height;
+}
+
+func (this *ImageAssembly) GetInputCount() int {
+	return this.input_count;
+}
+
+func (this *ImageAssembly) GetFrameCount() int {
+	return this.frame_count;
 }
 
 func (this *ImageAssembly) GetTemplate() *AssemblyList {
@@ -492,7 +491,8 @@ func (this *ImageAssembly) AssembleImage(frame int, images *AssemblyList) error 
 
 	var registers [4]register
 
-	debugpix := 140 + this.frames[frame].Width * 66
+	//debugpix := 100 + this.frames[frame].Width * 120
+	debugpix := -1
 
 
 	for pixel := 0; pixel < pixel_count; pixel++ {
@@ -510,7 +510,6 @@ func (this *ImageAssembly) AssembleImage(frame int, images *AssemblyList) error 
 
 			switch operation {
 				case opNoop:
-					//fmt.Print("NOOP")
 					break
 				case opMove:
 					param := bytecode[byte_index]
@@ -524,18 +523,14 @@ func (this *ImageAssembly) AssembleImage(frame int, images *AssemblyList) error 
 					registers[destination_register].b = registers[source_register].b
 					registers[destination_register].a = registers[source_register].a
 
-					//fmt.Printf("MOVE %02d, %02d", destination_register, source_register)
-
 					break
 				case opReturn:
-					//fmt.Print("RET ")
 					break
 				case opConstant:
 
 					param := bytecode[byte_index]
 					byte_index++
 					
-					//destination_register := param & 0x0F
 					destination_register := param >> 4
 
 					registers[destination_register].r = int(bytecode[byte_index + 0])
@@ -545,8 +540,6 @@ func (this *ImageAssembly) AssembleImage(frame int, images *AssemblyList) error 
 
 					byte_index += 4
 
-					//fmt.Printf("LOAD %02d, %02x %02x %02x %02x", destination_register, r, g, b, a)
-					
 					break
 				case opSample:
 					
@@ -556,38 +549,20 @@ func (this *ImageAssembly) AssembleImage(frame int, images *AssemblyList) error 
 					destination_register := param >> 4 
 					source_input := param & 0x0F
 
-
 					x := binary.LittleEndian.Uint16(bytecode[byte_index + 0 : byte_index + 2])
 					y := binary.LittleEndian.Uint16(bytecode[byte_index + 2 : byte_index + 4])
 
 					byte_index += 4
-
-					_ = x
-					_ = y
-					_ = source_input
 
 					source_image := images.Images[source_input]
 
 					source_pixel := source_image.Width * int(y) + int(x)
 					source_index := source_pixel * 4
 
-
-					/*registers[destination_register].r = 0x00
-					registers[destination_register].g = 0x00
-					registers[destination_register].b = 0x00
-					registers[destination_register].a = 0xFF*/
-
-					// TODO: implement sampling!!!
-					/*registers[destination_register].r = 0xFF
-					registers[destination_register].g = 0xFF
-					registers[destination_register].b = 0xFF
-					registers[destination_register].a = 0xFF*/
 					registers[destination_register].r = int(source_image.Pixels[source_index + 0])
 					registers[destination_register].g = int(source_image.Pixels[source_index + 1])
 					registers[destination_register].b = int(source_image.Pixels[source_index + 2])
 					registers[destination_register].a = 0xFF
-
-					//fmt.Printf("SMPL %02d, %02d %04d %04d", destination_register, source_input, x, y)
 
 					break
 				case opAdd:
@@ -601,7 +576,6 @@ func (this *ImageAssembly) AssembleImage(frame int, images *AssemblyList) error 
 					registers[destination_register].g += registers[source_register].g
 					registers[destination_register].b += registers[source_register].b
 					//registers[destination_register].a += registers[source_register].a
-
 
 					break
 				case opMultiply:
@@ -621,13 +595,9 @@ func (this *ImageAssembly) AssembleImage(frame int, images *AssemblyList) error 
 					registers[destination_register].g >>= 8
 					//registers[destination_register].a >>= 8
 
-					//fmt.Printf("MULT %02d, %02d", destination_register, source_register)
 					break
 				default:
-					//fmt.Print("INVD")
 			}
-
-			//fmt.Print("\n")
 
 			if pixel == debugpix {
 				for i := 0; i < 4; i++ {
@@ -663,15 +633,7 @@ func (this *ImageAssembly) AssembleImage(frame int, images *AssemblyList) error 
 		output[pixel * 4 + 2] = byte(registers[0].b)
 		//output[pixel * 4 + 3] = byte(registers[0].a)
 		output[pixel * 4 + 3] = 0xFF
-
-		/*output[pixel * 4 + 0] = 0x00
-		output[pixel * 4 + 1] = 0xFF
-		output[pixel * 4 + 2] = 0xFF
-		output[pixel * 4 + 3] = 0xFF*/
 	}
-
-
-
 
 	return nil
 }
