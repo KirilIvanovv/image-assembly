@@ -11,4 +11,6 @@ add_library(imageassembly STATIC
     error.c
     bytecode.h
     bytecode.c
+    assembly.h
+    assembly.c
 )

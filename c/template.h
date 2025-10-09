@@ -7,8 +7,8 @@ typedef struct imgasm_frame {
     int width;
     int height;
     long offset;
-    char* bytecode_begin;
-    int bytecode_length;
+    char* bytecode;
+    long bytecode_length;
 } imgasm_frame_t;
 
 typedef struct imgasm_input {
@@ -17,7 +17,7 @@ typedef struct imgasm_input {
 } imgasm_input_t;
 
 typedef struct imgasm_template {
-    int flags;
+    unsigned short flags;
 	
     imgasm_input_t* inputs;
     imgasm_frame_t* frames;
@@ -34,6 +34,11 @@ int imgasm_load_template_fd(FILE* fd, int flags, imgasm_template_t* template);
 
 int imgasm_load_frame(FILE* fd, imgasm_template_t* template, int frame_index);
 
+int imgasm_save_template(const char* filepath, imgasm_template_t* template);
+int imgasm_save_template_fd(FILE* fd, imgasm_template_t* template);
+
 void imgasm_clear_template(imgasm_template_t* template);
+
+void imgasm_print_bytecode(imgasm_template_t* template, int frame, int x, int y);
 
 #endif // IMGASM_TEMPLATE_H
