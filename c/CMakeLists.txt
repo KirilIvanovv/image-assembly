@@ -14,3 +14,7 @@ add_library(imageassembly STATIC
     assembly.h
     assembly.c
 )
+
+target_include_directories(imageassembly PUBLIC 
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)

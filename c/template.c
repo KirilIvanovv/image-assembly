@@ -140,6 +140,7 @@ int imgasm_load_template_fd(FILE* fd, int flags, imgasm_template_t* template) {
                 return imgasm_set_error(IMGASM_ERROR_FILE_IO_ERROR, "Can't read bytecode size");
             }
             
+			template->frames[i].offset = ftell(fd);
             template->frames[i].bytecode_length = bytecode_size;
             
             if (flags & IMGASM_LOAD_FULL) {
