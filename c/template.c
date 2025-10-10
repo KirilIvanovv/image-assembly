@@ -460,13 +460,13 @@ void imgasm_print_bytecode(imgasm_template_t* template, int frame, int x, int y)
                 unsigned char destination_register = param >> 4;
                 unsigned char source_input = param & 0x0F;
                 
-                unsigned short sample_x = frm->bytecode[byte_index + 0] | 
-                                   (frm->bytecode[byte_index + 1] << 8);
-                unsigned short sample_y = frm->bytecode[byte_index + 2] | 
-                                   (frm->bytecode[byte_index + 3] << 8);
+                unsigned short sample_x = (unsigned char)frm->bytecode[byte_index + 0] | 
+                                   ((unsigned char)frm->bytecode[byte_index + 1] << 8);
+                unsigned short sample_y = (unsigned char)frm->bytecode[byte_index + 2] | 
+                                   ((unsigned char)frm->bytecode[byte_index + 3] << 8);
                 
                 byte_index += 4;
-                
+				
                 printf("SMPL %02d, %02d %04d %04d", destination_register, source_input, 
                        sample_x, sample_y);
                 break;

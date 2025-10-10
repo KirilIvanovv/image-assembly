@@ -54,7 +54,8 @@ static void print_usage() {
 }
 
 static imgasm_image_t* load_image(const char* filename, int expected_width, int expected_height) {
-    int width, height, channels;
+    stbi_set_flip_vertically_on_load(1);
+	int width, height, channels;
     uint8_t* data = stbi_load(filename, &width, &height, &channels, 4);
     
     if (!data) {
