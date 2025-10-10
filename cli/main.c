@@ -130,7 +130,8 @@ static int save_image(const char* filename, imgasm_image_t* image) {
     }
 }
 
-static int save_animated_gif(const char* filename, imgasm_template_t* template, 
+static int save_animated_gif(FILE* fd, const char* filename,
+                     imgasm_template_t* template, 
                      imgasm_assembly_list_t* inputs, int delay_cs) {
     if (template->frame_count == 0) {
         printf("No frames to save\n");
@@ -146,7 +147,7 @@ static int save_animated_gif(const char* filename, imgasm_template_t* template,
     for (int i = 0; i < template->frame_count; i++) {
         printf("Processing frame %d/%d...\n", i + 1, template->frame_count);
         
-		// TODO: imgasm_load_frame(fd, template, i);
+		imgasm_load_frame(fd, template, i);
 		
         int result = imgasm_assemble_image(template, i, inputs);
         if (result != IMGASM_ERROR_NONE) {
@@ -226,14 +227,21 @@ int main(int argc, char** argv) {
         return 1;
     }
     
+	// SETUP FLAGS
     printf("Loading template: %s\n", opts.template_file);
     imgasm_template_t template;
 	
 	int flags = IMGASM_LOAD_DEFAULT;
 	if (opts.load_full || opts.save_template) flags |= IMGASM_LOAD_FULL;
 
-    int result = imgasm_load_template(opts.template_file, flags, &template);
-    if (result != IMGASM_ERROR_NONE) {
+	// LOAD TEMPLATE
+    FILE* fd = fopen(opts.template_file, "rb");
+    if (!fd) {
+        printf("Failed to open file '%s'", opts.template_file);
+		return 1;
+    }
+	
+    if (imgasm_load_template_fd(fd, flags, &template)) {
         imgasm_print_error();
         return 1;
     }
@@ -241,6 +249,7 @@ int main(int argc, char** argv) {
     printf("Template loaded: %d inputs, %d frames\n", 
            template.input_count, template.frame_count);
     
+	// PRINT INFO
     if (opts.print_info) {
         printf("\n=== Template Information ===\n");
         printf("Inputs: %d\n", template.input_count);
@@ -258,7 +267,7 @@ int main(int argc, char** argv) {
     }
     
     if (opts.print_pixel_x >= 0) {
-		// TODO: imgasm_load_frame(fd, &template, opts.print_pixel_frame);
+		imgasm_load_frame(fd, &template, opts.print_pixel_frame);
 		
         printf("\n=== Pixel Bytecode ===\n");
         imgasm_print_bytecode(&template, opts.print_pixel_frame, 
@@ -271,10 +280,10 @@ int main(int argc, char** argv) {
         return 0;
     }
     
+	// SAVE TEMPLATE
     if (opts.save_template && !opts.output_file) {
         printf("Saving template: %s\n", opts.save_template);
-        result = imgasm_save_template(opts.save_template, &template);
-        if (result != IMGASM_ERROR_NONE) {
+        if (imgasm_save_template(opts.save_template, &template)) {
             imgasm_print_error();
             return 1;
         }
@@ -282,6 +291,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     
+	// ASSEMBLE IMAGE
     if (opts.output_file) {
         if (opts.input_count == 0) {
             printf("Error: No input images specified\n");
@@ -316,18 +326,18 @@ int main(int argc, char** argv) {
         
         const char* ext = strrchr(opts.output_file, '.');
         if (ext && strcmp(ext, ".gif") == 0 && opts.frame_index == -1) {
-            save_animated_gif(opts.output_file, &template, &inputs, 5);
+            save_animated_gif(fd, opts.output_file, &template, &inputs, 5);
         } else {
             int frame = (opts.frame_index > 0) ? opts.frame_index : 0;
 			
-            // TODO: imgasm_load_frame(fd, &template, frame);
+            imgasm_load_frame(fd, &template, frame);
 			
             printf("Assembling frame %d...\n", frame);
-            result = imgasm_assemble_image(&template, frame, &inputs);
-            if (result != IMGASM_ERROR_NONE) {
+            if (imgasm_assemble_image(&template, frame, &inputs)) {
                 imgasm_print_error();
             } else {
                 printf("Saving output: %s\n", opts.output_file);
+				
                 if (save_image(opts.output_file, &inputs.images[0])) {
                     printf("Output saved successfully\n");
                 } else {
