@@ -142,7 +142,7 @@ static int save_animated_gif(FILE* fd, const char* filename,
     int width = template->frames[0].width;
     int height = template->frames[0].height;
     
-    MsfGifState gifState = {};
+    MsfGifState gifState = {0};
     msf_gif_begin(&gifState, width, height);
     
     for (int i = 0; i < template->frame_count; i++) {
