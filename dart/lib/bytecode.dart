@@ -22,7 +22,7 @@ class OpCode {
       case sample:
         return 5;
       default:
-        return -1;
+        return 0;
     }
   }
 

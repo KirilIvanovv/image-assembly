@@ -86,11 +86,6 @@ class Template
 
         for (int i = 0; i < frameCount; i++) 
         {
-            String frameHeader = String.fromCharCodes(bytes.sublist(offset, offset + 4));
-            if (frameHeader != "FRME") 
-            {
-                throw Exception("Invalid frame header at offset $offset");
-            }
             offset += 4;
 
             int fWidth = data.getUint16(offset, Endian.little);
@@ -98,48 +93,34 @@ class Template
             int fHeight = data.getUint16(offset, Endian.little);
             offset += 2;
 
-            int bcLen = 0;
-            int bcOffset = 0;
-
+            int bcLen;
             if (version >= 1) 
             {
                 bcLen = data.getUint32(offset, Endian.little);
                 offset += 4;
-                bcOffset = offset;
-                offset += bcLen;
             } 
             else 
             {
-                bcOffset = offset;
+                int startBc = offset;
                 int pixelCount = fWidth * fHeight;
-                int scanOffset = offset;
-
                 for (int p = 0; p < pixelCount; p++) 
                 {
                     while (true) 
                     {
-                        if (scanOffset >= bytes.length) 
-                        {
-                            throw Exception("Unexpected end of bytecode at pixel $p");
-                        }
-
-                        int op = bytes[scanOffset];
+                        int op = bytes[offset];
                         int pLen = OpCode.getLength(op);
-
-                        if (pLen < 0) 
-                        {
-                            throw Exception("Invalid operation 0x${op.toRadixString(16)} at offset $scanOffset");
-                        }
-                        scanOffset += 1 + pLen; 
-                        if (op == OpCode.ret) break; 
+                        offset += 1 + pLen;
+                        if (op == OpCode.ret) break;
                     }
-                }
-                bcLen = scanOffset - bcOffset;
-                offset = scanOffset;
+            }
+            bcLen = offset - startBc;
+            offset = startBc; 
             }
 
-            Uint8List bc = bytes.sublist(bcOffset, bcOffset + bcLen);
-            frames.add(Frame(fWidth, fHeight, bcOffset, bc, bcLen));
+            Uint8List bc = bytes.sublist(offset, offset + bcLen);
+            offset += bcLen; 
+
+            frames.add(Frame(fWidth, fHeight, offset - bcLen, bc, bcLen));
         }
 
         return Template(flag, inputs, frames);
